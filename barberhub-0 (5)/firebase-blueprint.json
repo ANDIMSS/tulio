@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "users": {
+      "title": "users",
+      "description": "Perfil global de usuário, licença e controle de acesso RBAC",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "isApproved": { "type": "boolean" },
+        "isAdmin": { "type": "boolean" },
+        "platformRole": {
+          "type": "string",
+          "enum": ["super_admin"],
+          "description": "Papel de administração global da plataforma (Super Admin). Se ausente ou null, usuário não possui privilégios de plataforma."
+        },
+        "createdAt": { "type": "string" },
+        "licenseDurationType": { "type": "string" },
+        "licenseExpiresAt": { "type": "string" },
+        "licenseSetAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "isApproved", "isAdmin", "createdAt"]
+    },
+    "userData": {
+      "title": "userData",
+      "description": "Dados privativos do usuário isolados por tenant UID",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "data": { "type": "string" }
+      },
+      "required": ["id", "userId"]
+    },
+    "crmLeads": {
+      "title": "crmLeads",
+      "description": "Gestão de leads e clientes no CRM do tenant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "stage": { "type": "string" },
+        "origin": { "type": "string" },
+        "responsible": { "type": "string" },
+        "potentialValue": { "type": "number" },
+        "notes": { "type": "string" },
+        "planName": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "phone", "stage"]
+    },
+    "crmNotifications": {
+      "title": "crmNotifications",
+      "description": "Notificações e alertas de clientes inativos (30+ dias)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "phone": { "type": "string" },
+        "daysInactive": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "clientId", "status"]
+    },
+    "appointments": {
+      "title": "appointments",
+      "description": "Agendamentos de clientes isolados por tenant com allowlist estrita",
+      "type": "object",
+      "properties": {
+        "client": { "type": "string" },
+        "phone": { "type": "string" },
+        "service": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "professional": { "type": "string" },
+        "professionalId": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "duration": { "type": "string" },
+        "price": { "type": "string" },
+        "servicePrice": { "type": "string" },
+        "totalPrice": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "status": { "type": "string" },
+        "slotId": { "type": "string" },
+        "notes": { "type": "string" },
+        "planName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["client", "phone", "service", "professional", "date", "time", "status", "slotId"]
+    },
+    "occupied_slots": {
+      "title": "occupied_slots",
+      "description": "Slots ocupados da agenda vinculados atomicamente a agendamentos legítimos",
+      "type": "object",
+      "properties": {
+        "slotId": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "professional": { "type": "string" },
+        "professionalId": { "type": "string" },
+        "status": { "type": "string" },
+        "appointmentId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["slotId", "date", "time", "professional", "status", "appointmentId"]
+    },
+    "tenantMembers": {
+      "title": "tenantMembers",
+      "description": "Membros do tenant com RBAC granular e matriz de permissões por módulo",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "manager", "barber", "receptionist", "finance"]
+        },
+        "active": { "type": "boolean" },
+        "joinedAt": { "type": "string" },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Permissões granulares atribuídas ao membro (least privilege)"
+        }
+      },
+      "required": ["uid", "role", "active"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "Perfil de usuário com RBAC e validade de licença"
+    },
+    "/users/{userId}/{allSubcollections=**}": {
+      "schema": "userData",
+      "description": "Subcoleções isoladas totalmente por cliente (Zero-Trust)"
+    },
+    "/tenants/{tenantId}/members/{memberId}": {
+      "schema": "tenantMembers",
+      "description": "Membros do tenant com RBAC granular por módulo"
+    },
+    "/tenants/{tenantId}/appointments/{appointmentId}": {
+      "schema": "appointments",
+      "description": "Agendamentos públicos e privados com validação de consistência e allowlist"
+    },
+    "/tenants/{tenantId}/occupied_slots/{slotId}": {
+      "schema": "occupied_slots",
+      "description": "Slots ocupados da agenda com validação de unicidade e vínculo atômico"
+    }
+  }
+}

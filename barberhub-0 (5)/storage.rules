@@ -1,0 +1,137 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        (firestore.exists(/databases/ai-studio-barbeariacomfiri-40731b0d-49a4-45b6-a0b7-c2d72e8ecb76/documents/users/$(request.auth.uid)) &&
+         firestore.get(/databases/ai-studio-barbeariacomfiri-40731b0d-49a4-45b6-a0b7-c2d72e8ecb76/documents/users/$(request.auth.uid)).data.get('platformRole', '') == 'super_admin') ||
+        (request.auth.token.email != null && (
+          request.auth.token.email.lower() == 'conecdevce@gmail.com' ||
+          request.auth.token.email.lower() == 'conectdevce@gmail.com'
+        ))
+      );
+    }
+
+    function getUserData() {
+      return firestore.get(/databases/ai-studio-barbeariacomfiri-40731b0d-49a4-45b6-a0b7-c2d72e8ecb76/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isApprovedTenantMember(tenantId) {
+      return isSignedIn() &&
+        firestore.exists(/databases/ai-studio-barbeariacomfiri-40731b0d-49a4-45b6-a0b7-c2d72e8ecb76/documents/users/$(request.auth.uid)) &&
+        getUserData().tenantId == tenantId &&
+        getUserData().get('isApproved', false) == true &&
+        firestore.exists(/databases/ai-studio-barbeariacomfiri-40731b0d-49a4-45b6-a0b7-c2d72e8ecb76/documents/tenants/$(tenantId)/members/$(request.auth.uid)) &&
+        firestore.get(/databases/ai-studio-barbeariacomfiri-40731b0d-49a4-45b6-a0b7-c2d72e8ecb76/documents/tenants/$(tenantId)/members/$(request.auth.uid)).data.active == true;
+    }
+
+    function getMemberData(tenantId) {
+      return firestore.get(/databases/ai-studio-barbeariacomfiri-40731b0d-49a4-45b6-a0b7-c2d72e8ecb76/documents/tenants/$(tenantId)/members/$(request.auth.uid)).data;
+    }
+
+    function isTenantOwnerOrManager(tenantId) {
+      return isApprovedTenantMember(tenantId) && (
+        getMemberData(tenantId).role == 'owner' ||
+        getMemberData(tenantId).role == 'manager'
+      );
+    }
+
+    function hasMemberPermission(tenantId, perm) {
+      return isApprovedTenantMember(tenantId) && (
+        getMemberData(tenantId).role == 'owner' ||
+        (getMemberData(tenantId).get('permissions', []).hasAny([perm]))
+      );
+    }
+
+    function canWriteLandingMedia(tenantId) {
+      return isSuperAdmin() || isTenantOwnerOrManager(tenantId) || hasMemberPermission(tenantId, 'landing.write');
+    }
+
+    function canReadPrivateMedia(tenantId) {
+      return isSuperAdmin() || isTenantOwnerOrManager(tenantId) || hasMemberPermission(tenantId, 'finance.read') || hasMemberPermission(tenantId, 'settings.read');
+    }
+
+    function canWritePrivateMedia(tenantId) {
+      return isSuperAdmin() || isTenantOwnerOrManager(tenantId) || hasMemberPermission(tenantId, 'finance.write') || hasMemberPermission(tenantId, 'settings.write');
+    }
+
+    function canDeletePrivateMedia(tenantId) {
+      return isSuperAdmin() || isTenantOwnerOrManager(tenantId) || hasMemberPermission(tenantId, 'finance.delete');
+    }
+
+    // Validation for public media uploads (Images and Videos up to 100MB)
+    function isValidPublicMedia() {
+      return request.resource != null &&
+        request.resource.size > 0 &&
+        request.resource.size <= 100 * 1024 * 1024 &&
+        (
+          request.resource.contentType == 'image/jpeg' ||
+          request.resource.contentType == 'image/png' ||
+          request.resource.contentType == 'image/webp' ||
+          request.resource.contentType == 'image/gif' ||
+          request.resource.contentType.matches('image/.*') ||
+          request.resource.contentType.matches('video/.*') ||
+          request.resource.contentType == 'application/octet-stream'
+        );
+    }
+
+    // Strict validation for private media uploads (Safe docs & images: PDF, CSV, JSON, Excel, Images, max 10MB)
+    function isValidPrivateDoc() {
+      return request.resource != null &&
+        request.resource.size > 0 &&
+        request.resource.size <= 10 * 1024 * 1024 &&
+        (
+          request.resource.contentType == 'image/jpeg' ||
+          request.resource.contentType == 'image/png' ||
+          request.resource.contentType == 'image/webp' ||
+          request.resource.contentType == 'application/pdf' ||
+          request.resource.contentType == 'text/csv' ||
+          request.resource.contentType == 'application/json' ||
+          request.resource.contentType == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        );
+    }
+
+    // Default deny for unmapped paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Public assets folder: logos, services, barbers, landing page images and videos
+    match /tenants/{tenantId}/public/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if canWriteLandingMedia(tenantId) && isValidPublicMedia();
+      allow delete: if canWriteLandingMedia(tenantId);
+    }
+
+    // 1b. Backward-compatibility for existing legacy service and barber assets
+    match /tenants/{tenantId}/services/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if canWriteLandingMedia(tenantId) && isValidPublicMedia();
+      allow delete: if canWriteLandingMedia(tenantId);
+    }
+
+    match /tenants/{tenantId}/barbers/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if canWriteLandingMedia(tenantId) && isValidPublicMedia();
+      allow delete: if canWriteLandingMedia(tenantId);
+    }
+
+    // 2. Private administrative folder: reports, admin docs, financials, PDFs, exports
+    match /tenants/{tenantId}/private/{allPaths=**} {
+      allow read: if canReadPrivateMedia(tenantId);
+      allow create, update: if canWritePrivateMedia(tenantId) && isValidPrivateDoc();
+      allow delete: if canDeletePrivateMedia(tenantId);
+    }
+
+    // 3. Legacy compatibility for existing unnested tenant files (keeps existing Landing Page assets working)
+    match /tenants/{tenantId}/{fileName} {
+      allow read: if true;
+      allow create, update: if canWriteLandingMedia(tenantId) && isValidPublicMedia();
+      allow delete: if canWriteLandingMedia(tenantId);
+    }
+  }
+}

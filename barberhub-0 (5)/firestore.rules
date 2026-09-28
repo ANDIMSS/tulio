@@ -1,0 +1,589 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdminEmail(email) {
+      return email is string && (
+        email == 'conecdevce@gmail.com' ||
+        email == 'conectdevce@gmail.com' ||
+        email == 'CONECDEVCE@GMAIL.COM' ||
+        email == 'CONECTDEVCE@GMAIL.COM' ||
+        email.matches('(?i)^(conecdevce@gmail\\.com|conectdevce@gmail\\.com)$')
+      );
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() &&
+        request.auth.token != null &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email != null &&
+        isSuperAdminEmail(request.auth.token.email);
+    }
+
+    function claimExists(claimEmail) {
+      return exists(/databases/$(database)/documents/tenant_claims/$(claimEmail));
+    }
+
+    function getClaimTenantId(claimEmail) {
+      return get(/databases/$(database)/documents/tenant_claims/$(claimEmail)).data.tenantId;
+    }
+
+    function hasValidTenantClaim(targetTenantId) {
+      return isSignedIn() &&
+        request.auth.token != null &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email != null &&
+        claimExists(request.auth.token.email.lower()) &&
+        getClaimTenantId(request.auth.token.email.lower()) == targetTenantId;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow list: if isSuperAdmin();
+      
+      allow create: if isSuperAdmin() || (
+        isSignedIn() && request.auth.uid == userId &&
+        request.resource.data.get('isApproved', false) == false &&
+        request.resource.data.get('isAdmin', false) == false &&
+        (!('email' in request.resource.data) || request.resource.data.email == request.auth.token.email || (request.auth.token.email != null && request.resource.data.email.lower() == request.auth.token.email.lower())) &&
+        (!('platformRole' in request.resource.data) || request.resource.data.platformRole == null || request.resource.data.platformRole == '') &&
+        (!('tenantId' in request.resource.data) || request.resource.data.tenantId == null || request.resource.data.tenantId == '')
+      );
+      
+      allow update: if isSuperAdmin() || (
+        isSignedIn() && request.auth.uid == userId && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'platformRole',
+            'isAdmin', 
+            'isApproved', 
+            'licenseExpiresAt', 
+            'licenseDurationType', 
+            'licenseSetAt', 
+            'tenantId', 
+            'uid', 
+            'email', 
+            'createdAt'
+          ]) ||
+          (
+            request.auth.token.email != null &&
+            hasValidTenantClaim(request.resource.data.tenantId) &&
+            request.resource.data.get('isApproved', false) == true &&
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['platformRole', 'isAdmin', 'email', 'uid', 'createdAt', 'licenseExpiresAt', 'licenseDurationType', 'licenseSetAt'])
+          )
+        )
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    match /tenant_claims/{email} {
+      allow get: if isSuperAdmin() || (
+        isSignedIn() && request.auth.token != null &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() == email
+      );
+      allow delete: if isSuperAdmin() || (
+        isSignedIn() && request.auth.token != null &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() == email
+      );
+      allow write: if isSuperAdmin();
+    }
+
+    match /domainMappings/{domainId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /publicTenants/{tenantId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /platform_audit_logs/{auditId} {
+      allow get, list: if isSuperAdmin();
+      allow create: if isSuperAdmin() &&
+        request.resource.data.keys().hasAll(['id', 'actorUid', 'action', 'module', 'createdAt', 'schemaVersion']) &&
+        request.resource.data.actorUid == request.auth.uid &&
+        request.resource.data.schemaVersion == 1 &&
+        request.resource.data.action is string &&
+        request.resource.data.module is string;
+      allow update, delete: if false;
+    }
+
+    match /tenants/{tenantId} {
+      allow get: if isSuperAdmin() || (isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isApproved', false) == true) ||
+        hasValidTenantClaim(tenantId))
+      );
+      allow list: if isSuperAdmin();
+      allow create: if isSuperAdmin();
+      allow update: if isSuperAdmin() || (
+        isSignedIn() && 
+        resource.data.ownerUid == request.auth.uid &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'accessMode',
+          'licenseExpiresAt',
+          'licenseExpiresAtTimestamp',
+          'licenseExpiresAtMillis',
+          'licenseStatus',
+          'licenseDurationType',
+          'licenseStartedAt',
+          'licenseSetAt',
+          'planId',
+          'status',
+          'ownerUid',
+          'masterMaintenanceEnabled'
+        ])
+      ) || (
+        isSignedIn() &&
+        resource.data.get('ownerUid', null) == null &&
+        hasValidTenantClaim(tenantId) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'accessMode',
+          'licenseExpiresAt',
+          'licenseExpiresAtTimestamp',
+          'licenseExpiresAtMillis',
+          'licenseStatus',
+          'licenseDurationType',
+          'licenseStartedAt',
+          'licenseSetAt',
+          'planId',
+          'masterMaintenanceEnabled'
+        ])
+      );
+      allow delete: if isSuperAdmin();
+
+      function getMemberDoc() {
+        return get(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid));
+      }
+      
+      function isTenantOwner() {
+        return isSignedIn() && exists(/databases/$(database)/documents/tenants/$(tenantId)) && 
+               get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid;
+      }
+
+      function isTenantMember() {
+        return isSignedIn() &&
+               exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId &&
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isApproved', false) == true &&
+               exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid)) && 
+               getMemberDoc().data.active == true;
+      }
+      
+      function isTenantAdmin() {
+        return isSuperAdmin() || 
+               isTenantOwner() ||
+               (canAccessSystem() && (
+                 isTenantMember() && (
+                   getMemberDoc().data.role == 'owner' || 
+                   getMemberDoc().data.role == 'manager' ||
+                   (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true)
+                 )
+               ));
+      }
+
+      function isTenantPubliclyAccessible() {
+        return (exists(/databases/$(database)/documents/publicTenants/$(tenantId)) &&
+                get(/databases/$(database)/documents/publicTenants/$(tenantId)).data.status == 'active' &&
+                (get(/databases/$(database)/documents/publicTenants/$(tenantId)).data.get('accessMode', 'full') == 'full' ||
+                 get(/databases/$(database)/documents/publicTenants/$(tenantId)).data.get('accessMode', 'full') == 'landing_only')) ||
+               (exists(/databases/$(database)/documents/tenants/$(tenantId)) &&
+                get(/databases/$(database)/documents/tenants/$(tenantId)).data.status == 'active' &&
+                (get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('accessMode', 'full') == 'full' ||
+                 get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('accessMode', 'full') == 'landing_only'));
+      }
+
+      function isTenantLicenseValid(tenantData) {
+        let status = tenantData.get('licenseStatus', 'active');
+        let durationType = tenantData.get('licenseDurationType', '1_month');
+        
+        return status != 'suspended' &&
+               status != 'expired' &&
+               (
+                 durationType == 'lifetime' ||
+                 tenantData.get('licenseExpiresAt', null) == null ||
+                 (
+                   ('licenseExpiresAtTimestamp' in tenantData && 
+                    tenantData.licenseExpiresAtTimestamp is timestamp && 
+                    tenantData.licenseExpiresAtTimestamp > request.time) ||
+                   ('licenseExpiresAtMillis' in tenantData && 
+                    tenantData.licenseExpiresAtMillis is number && 
+                    tenantData.licenseExpiresAtMillis > request.time.toMillis()) ||
+                   ('licenseExpiresAt' in tenantData && 
+                    tenantData.licenseExpiresAt is timestamp && 
+                    tenantData.licenseExpiresAt > request.time)
+                 )
+               );
+      }
+
+      function canAccessSystem() {
+        return isSuperAdmin() || (
+          isTenantMember() &&
+          exists(/databases/$(database)/documents/tenants/$(tenantId)) &&
+          get(/databases/$(database)/documents/tenants/$(tenantId)).data.status == 'active' &&
+          get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('accessMode', 'full') == 'full' &&
+          isTenantLicenseValid(get(/databases/$(database)/documents/tenants/$(tenantId)).data)
+        );
+      }
+
+      function getMemberRole() {
+        return getMemberDoc().data.get('role', 'barber');
+      }
+
+      function isOwnerOrAdmin() {
+        return isTenantOwner() ||
+               getMemberRole() == 'owner' ||
+               (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true);
+      }
+
+      function hasExplicitPermission(perm) {
+        return ('permissions' in getMemberDoc().data) &&
+               getMemberDoc().data.permissions is list &&
+               (perm in getMemberDoc().data.permissions);
+      }
+
+      function canReadAppointments() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          getMemberRole() == 'barber' ||
+          hasExplicitPermission('appointments.read')
+        ));
+      }
+
+      function canWriteAppointments() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          getMemberRole() == 'barber' ||
+          hasExplicitPermission('appointments.write')
+        ));
+      }
+
+      function canDeleteAppointments() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          hasExplicitPermission('appointments.delete')
+        ));
+      }
+
+      function canReadFinance() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          hasExplicitPermission('finance.read')
+        ));
+      }
+
+      function canWriteFinance() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          hasExplicitPermission('finance.write')
+        ));
+      }
+
+      function canDeleteFinance() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          hasExplicitPermission('finance.delete')
+        ));
+      }
+
+      function canReadCRM() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          hasExplicitPermission('crm.read')
+        ));
+      }
+
+      function canWriteCRM() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          hasExplicitPermission('crm.write')
+        ));
+      }
+
+      function canDeleteCRM() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          hasExplicitPermission('crm.delete')
+        ));
+      }
+
+      function canReadClients() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          getMemberRole() == 'barber' ||
+          hasExplicitPermission('clients.read')
+        ));
+      }
+
+      function canWriteClients() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          hasExplicitPermission('clients.write')
+        ));
+      }
+
+      function canDeleteClients() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          hasExplicitPermission('clients.delete')
+        ));
+      }
+
+      function canReadLanding() {
+        return isTenantPubliclyAccessible() || canReadSettings();
+      }
+
+      function canReadSettings() {
+        return isTenantPubliclyAccessible() || isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          hasExplicitPermission('settings.read')
+        ));
+      }
+
+      function canWriteSettings() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          hasExplicitPermission('settings.write')
+        ));
+      }
+
+      function canWriteLanding() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          hasExplicitPermission('landing.write')
+        ));
+      }
+
+      function canReadMembers() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          getMemberRole() == 'manager' ||
+          hasExplicitPermission('members.read')
+        ));
+      }
+
+      function canManageMembers() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isTenantOwner() ||
+          (isOwnerOrAdmin() && hasExplicitPermission('members.manage'))
+        ));
+      }
+
+      function canReadNotifications() {
+        return isSuperAdmin() || canAccessSystem();
+      }
+
+      function canWriteNotifications() {
+        return isSuperAdmin() || canAccessSystem();
+      }
+
+      function canReadReports() {
+        return isSuperAdmin() || (canAccessSystem() && (
+          isOwnerOrAdmin() ||
+          hasExplicitPermission('reports.read')
+        ));
+      }
+
+      function canReadAudit() {
+        return isSuperAdmin() || (canAccessSystem() && isTenantOwner());
+      }
+
+      function isValidTenantAuditLog() {
+        let data = request.resource.data;
+        let allowedKeys = [
+          'id',
+          'tenantId',
+          'actorUid',
+          'actorEmail',
+          'actorName',
+          'actorRole',
+          'action',
+          'module',
+          'targetType',
+          'targetId',
+          'description',
+          'metadata',
+          'createdAt',
+          'createdAtMillis',
+          'schemaVersion',
+          'severity'
+        ];
+        return data.keys().hasAll(['id', 'tenantId', 'actorUid', 'action', 'module', 'createdAt', 'schemaVersion']) &&
+               data.keys().hasOnly(allowedKeys) &&
+               data.actorUid == request.auth.uid &&
+               data.tenantId == tenantId &&
+               data.schemaVersion == 1 &&
+               data.action is string && data.action.size() <= 100 &&
+               data.module is string && data.module.size() <= 50 &&
+               data.createdAt is string && data.createdAt.size() <= 50 &&
+               (!('platformRole' in data) || isSuperAdmin()) &&
+               (data.action != 'platform_role.changed' || isSuperAdmin()) &&
+               (data.module != 'platform' || isSuperAdmin());
+      }
+
+      match /members/{memberId} {
+        allow read: if isSuperAdmin() || canReadMembers() || (isSignedIn() && request.auth.uid == memberId);
+        allow create: if isSuperAdmin() || (
+          canManageMembers() &&
+          !('platformRole' in request.resource.data) &&
+          (request.resource.data.get('role', 'barber') != 'owner' || isTenantOwner())
+        ) || (
+          isSignedIn() &&
+          request.auth.uid == memberId &&
+          hasValidTenantClaim(tenantId) &&
+          get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('ownerUid', null) == null &&
+          request.resource.data.role == 'owner' &&
+          request.resource.data.active == true &&
+          !('platformRole' in request.resource.data)
+        );
+        allow update: if isSuperAdmin() || (
+          canManageMembers() &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['platformRole']) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) || request.resource.data.role != 'owner' || isTenantOwner())
+        ) || (
+          isTenantMember() && request.auth.uid == memberId && 
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['platformRole', 'role', 'active', 'uid', 'permissions'])
+        );
+        allow delete: if isSuperAdmin() || (
+          canManageMembers() &&
+          resource.data.get('role', '') != 'owner'
+        );
+      }
+
+      match /settings/{docId} {
+        allow read: if canReadSettings();
+        allow write: if canWriteSettings();
+      }
+
+      match /config/{docId} {
+        allow read: if canReadSettings();
+        allow write: if canWriteSettings();
+      }
+
+      match /services/{docId} {
+        allow read: if canReadLanding();
+        allow write: if canWriteLanding();
+      }
+
+      match /barbers/{docId} {
+        allow read: if canReadLanding();
+        allow write: if canWriteLanding();
+      }
+
+      match /professionals/{docId} {
+        allow read: if canReadLanding();
+        allow write: if canWriteLanding();
+      }
+
+      match /testimonials/{docId} {
+        allow read: if canReadLanding();
+        allow write: if canWriteLanding();
+      }
+
+      match /differentials/{docId} {
+        allow read: if canReadLanding();
+        allow write: if canWriteLanding();
+      }
+
+      match /domains/{docId} {
+        allow read: if canReadLanding();
+        allow write: if canWriteLanding();
+      }
+
+      match /financial_transactions/{docId} {
+        allow get, list: if canReadFinance();
+        allow create, update: if canWriteFinance();
+        allow delete: if canDeleteFinance();
+      }
+
+      match /financial_categories/{docId} {
+        allow get, list: if canReadFinance();
+        allow create, update: if canWriteFinance();
+        allow delete: if canDeleteFinance();
+      }
+
+      match /crm_leads/{docId} {
+        allow get, list: if canReadCRM();
+        allow create, update: if canWriteCRM();
+        allow delete: if canDeleteCRM();
+      }
+
+      match /notifications/{docId} {
+        allow get, list: if canReadNotifications();
+        allow create, update, delete: if canWriteNotifications();
+      }
+
+      match /deletedClients/{docId} {
+        allow get, list: if canReadClients() || canReadCRM();
+        allow create, update: if canWriteClients() || canWriteCRM();
+        allow delete: if canDeleteClients() || canDeleteCRM();
+      }
+
+      match /clients/{docId} {
+        allow get, list: if canReadClients();
+        allow create, update: if canWriteClients();
+        allow delete: if canDeleteClients();
+      }
+
+      match /reports/{docId} {
+        allow get, list: if canReadReports();
+        allow write: if isSuperAdmin() || isOwnerOrAdmin();
+      }
+
+      match /audit_logs/{auditId} {
+        allow get, list: if canReadAudit();
+        allow create: if (isSuperAdmin() || canAccessSystem()) && isValidTenantAuditLog();
+        allow update, delete: if false;
+      }
+
+      match /occupied_slots/{slotId} {
+        allow get: if isTenantPubliclyAccessible() || canReadAppointments();
+        allow list: if canReadAppointments();
+        allow create: if canWriteAppointments() || (
+          isTenantPubliclyAccessible() &&
+          request.resource.data.keys().hasAll(['slotId', 'date', 'time', 'professional', 'status', 'appointmentId']) &&
+          request.resource.data.slotId == slotId &&
+          request.resource.data.status == 'occupied'
+        );
+        allow update: if canWriteAppointments();
+        allow delete: if canDeleteAppointments();
+      }
+
+      match /appointments/{docId} {
+        allow get, list: if canReadAppointments();
+        allow create: if canWriteAppointments() || (
+          isTenantPubliclyAccessible() &&
+          request.resource.data.keys().hasAll(['client', 'phone', 'service', 'professional', 'date', 'time', 'status']) &&
+          request.resource.data.status == 'Pendente'
+        );
+        allow update: if canWriteAppointments();
+        allow delete: if canDeleteAppointments();
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Barbearia Comfiri",
+  "description": "Plataforma e landing page para barbearia com gestão de agendamentos, planos semanais/mensais e painel administrativo.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
